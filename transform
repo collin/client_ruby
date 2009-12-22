@@ -1,0 +1,60 @@
+#!/usr/bin/env ruby
+require 'rubygems'
+require 'johnson'
+require 'parse_tree'
+input = STDIN.read
+puts "TRANSFORMING -----------------"
+puts; puts
+puts input
+puts; puts; puts "---------------------------"
+
+class ClientRuby
+  def initialize
+    @scope = nil;
+  end
+  
+  def visit_tree(tree)
+    [tree].map do |node|
+      key = node.shift
+      if respond_to?("visit_#{key}")
+        send("visit_#{key}", *node)
+      else
+        "UNDEFINED: #{key}, #{node.inspect}"
+      end      
+    end
+  end
+  
+  def visit_class(name, args, tree)
+    @scope = name.to_s
+    # TODO: ARGUMENTS
+    ["function #{name}() {};", visit_tree(tree)]
+  end
+  
+  def visit_scope(tree)
+    ["(function(){#{visit_tree(tree)}}).call(#{@scope})"]
+  end
+  
+  def visit_defn(method_name, tree)
+    "ClientRuby.define_method(this, #{method_name.to_s.inspect} #{visit_tree(tree)})"
+  end
+  
+  def visit_block(args, tree)
+    # TODO: ARGUMENTS
+    "function() {#{visit_tree(tree)}}"
+  end
+  
+  def visit_fcall(function_name, tree)
+    "#{function_name}(#{visit_tree(tree)})"
+  end
+  
+  def visit_array(*items)
+    items.map{|item| visit_tree(item).first }.inspect
+  end
+  
+  def visit_str(string)
+    string.inspect
+  end
+end
+
+require 'pp'
+puts ClientRuby.new.visit_tree(ParseTree.translate(input))
