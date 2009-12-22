@@ -1,7 +1,7 @@
 ClientRuby = {};
 function RubyObject () {}
 RubyObject.__contexts__ = [];
-RubyObject.prototype. = RubyObject;
+RubyObject.prototype = RubyObject;
 
 ClientRuby.define_class = function ClientRuby__define_class (context, name, superclass) {
   var klass = context[name] = function() {};
@@ -36,4 +36,8 @@ ClientRuby.extend_module = function ClientRuby__extend_module (self, module) {
 
 ClientRuby.include_module = function ClientRuby__include_module (self, module) {
   extend_module(self.prototype, module.prototype);
+}
+
+ClientRuby.puts = function ClientRuby__puts () {
+  console.log.apply(console, arguments);
 }

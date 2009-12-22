@@ -3,58 +3,145 @@ require 'rubygems'
 require 'johnson'
 require 'parse_tree'
 input = STDIN.read
-puts "TRANSFORMING -----------------"
-puts; puts
-puts input
-puts; puts; puts "---------------------------"
+# puts "TRANSFORMING -----------------"
+# puts; puts
+# puts input
+# puts; puts; puts "---------------------------"
 
-class ClientRuby
-  def initialize
-    @scope = nil;
-  end
-  
-  def visit_tree(tree)
-    [tree].map do |node|
-      key = node.shift
-      if respond_to?("visit_#{key}")
-        send("visit_#{key}", *node)
-      else
-        "UNDEFINED: #{key}, #{node.inspect}"
-      end      
-    end
-  end
-  
-  def visit_class(name, args, tree)
-    @scope = name.to_s
-    # TODO: ARGUMENTS
-    ["function #{name}() {};", visit_tree(tree)]
-  end
-  
-  def visit_scope(tree)
-    ["(function(){#{visit_tree(tree)}}).call(#{@scope})"]
-  end
-  
-  def visit_defn(method_name, tree)
-    "ClientRuby.define_method(this, #{method_name.to_s.inspect} #{visit_tree(tree)})"
-  end
-  
-  def visit_block(args, tree)
-    # TODO: ARGUMENTS
-    "function() {#{visit_tree(tree)}}"
-  end
-  
-  def visit_fcall(function_name, tree)
-    "#{function_name}(#{visit_tree(tree)})"
-  end
-  
-  def visit_array(*items)
-    items.map{|item| visit_tree(item).first }.inspect
-  end
-  
-  def visit_str(string)
-    string.inspect
+class NilClass # NAUGHTY NAUGHTY
+  def to_s
+    "null"
   end
 end
 
-require 'pp'
-puts ClientRuby.new.visit_tree(ParseTree.translate(input))
+class ClientRuby
+  
+  RubyNodes = [
+    # 00
+    :method, :fbody, :cfunc, :scope, :block,
+    :if, :case, :when, :opt_n, :while,
+    # 10
+    :until, :iter, :for, :break, :next,
+    :redo, :retry, :begin, :rescue, :resbody,
+    # 20
+    :ensure, :and, :or, :not, :masgn,
+    :lasgn, :dasgn, :dasgn_curr, :gasgn, :iasgn,
+    # 30
+    :cdecl, :cvasgn, :cvdecl, :op_asgn1, :op_asgn2,
+    :op_asgn_and, :op_asgn_or, :call, :fcall, :vcall,
+    # 40
+    :super, :zsuper, :array, :zarray, :hash,
+    :return, :yield, :lvar, :dvar, :gvar,
+    # 50
+    :ivar, :const, :cvar, :nth_ref, :back_ref,
+    :match, :match2, :match3, :lit, :str,
+    # 60
+    :dstr, :xstr, :dxstr, :evstr, :dregx,
+    :dregx_once, :args, :argscat, :argspush, :splat,
+    # 70
+    :to_ary, :svalue, :block_arg, :block_pass, :defn,
+    :defs, :alias, :valias, :undef, :class,
+    # 80
+    :module, :sclass, :colon2, :colon3, :cref,
+    :dot2, :dot3, :flip2, :flip3, :attrset,
+    # 90
+    :self, :nil, :true, :false, :defined,
+    # 95
+    :newline, :postexe, :alloca, :dmethod, :bmethod,
+    # 100
+    :memo, :ifunc, :dsym, :attrasgn,
+    :last
+   ]
+  
+  def initialize(tree, scope=nil)
+    @scope = scope
+    @tree = tree
+  end
+
+  def to_js
+    buffer = "with(ClientRuby) {\n"
+    buffer += "var self = ClientRuby;"
+    buffer += visit_tree(@tree)
+    buffer += "\n}"
+  end
+  
+  def visit_tree(tree)
+    key = tree.shift
+    if respond_to?("visit_#{key}")
+      send("visit_#{key}", *tree)
+    elsif RubyNodes.include?(key)
+      raise "UNDEFINED: #{key}, #{tree.inspect}"
+    else
+      raise "#{key} is NOT a Ruby ParseTree node type."
+    end
+  end
+  
+  def sub_tree(tree)
+    ClientRuby.new(nil, @scope).visit_tree(tree)      
+  end
+  
+  def visit_args(*args)
+    ""
+  end
+  
+  def visit_array(*items)
+    items.map{|item| sub_tree(item).first }.inspect
+  end
+  
+  def visit_block(*trees)
+    buf = "function() {"
+    for tree in trees
+      buf += sub_tree(tree)
+    end
+    buf += "}"
+    buf
+  end
+  
+  def visit_block_arg(*args)
+    ""
+  end
+  
+  def visit_block_pass(*args)
+    ""
+  end
+  
+  def visit_call(tree, method_name)
+    "#{sub_tree(tree)}.#{method_name}()"
+  end
+  
+  def visit_class(name, superclass, tree)
+    @scope = name.to_s
+    "define_class(self, #{name.to_s.inspect}, #{sub_tree(superclass) if superclass}, #{sub_tree(tree)};"
+  end
+  
+  def visit_defn(method_name, tree)
+    "define_method(self, #{method_name.to_s.inspect}, #{sub_tree(tree)});"
+  end
+  
+  def visit_defs(tree, method_name, method_tree)
+    "define_method(#{sub_tree(tree)}, #{method_name.to_s.inspect}, #{sub_tree(method_tree)})"
+  end
+  
+  def visit_fcall(function_name, tree)
+    "#{function_name}(#{sub_tree(tree)});"
+  end 
+  
+  def visit_lit(literal)
+    literal.to_s
+  end
+  
+  def visit_scope(tree)
+    "(function(){var self = #{@scope};#{sub_tree(tree)}})()"
+  end
+  
+  def visit_str(string)
+    string
+  end
+  
+  def visit_const(constant_name)
+    constant_name
+  end
+end
+
+puts ClientRuby.new(ParseTree.translate(input)).to_js
+
