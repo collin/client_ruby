@@ -1,11 +1,13 @@
 ClientRuby = {};
 function RubyObject () {}
+RubyObject.__class_vars__ = {};
 RubyObject.__contexts__ = [];
 RubyObject.prototype = RubyObject;
 
 ClientRuby.define_class = function ClientRuby__define_class (context, name, superclass) {
   var klass = context[name] = function() {};
   
+  klass.__class_vars__ = {};
   klass.__contexts__ = [];
   klass.prototype.__contexts__ = [];
   
@@ -27,6 +29,17 @@ ClientRuby.undefine_method = function ClientRuby__undefine_method (self, method_
   
   var context, contexts = self.__contexts__;
   for(context in contexts) undefine_method(contexts[contexts], method_name); // DO THIS: if(contexts.hasOwnProperty(context)) 
+}
+
+ClientRuby.assign_class_var = function ClientRuby__assign_class_var (self, name, value) {
+  self.__class_vars__[name] = value;
+  
+  var context, contexts = self.__contexts__;
+  for(context in contexts) assign_class_var(contexts[context], name, value); // DO THIS: if(contexts.hasOwnProperty(context))  
+}
+
+ClientRuby.class_vars = function ClientRuby__class_var (name) {
+  return self.__class_vars__;
 }
 
 ClientRuby.extend_module = function ClientRuby__extend_module (self, module) {

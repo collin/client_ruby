@@ -61,6 +61,7 @@ class ClientRuby
   def to_js
     buffer = "with(ClientRuby) {\n"
     buffer += "var self = ClientRuby;"
+    # buffer += "var locals = {};"
     buffer += visit_tree(@tree)
     buffer += "\n}"
   end
@@ -81,15 +82,30 @@ class ClientRuby
   end
   
   def visit_args(*args)
-    ""
+    buf = ""
+    args.each_with_index do |arg, index|
+      case arg
+      when Symbol
+        buf += "var #{arg} = arguments[#{index}];"
+      when Array
+        arg.shift # remove the :block key
+        arg.each do |asgn|
+          _, lvar_name, asgn_tree = *asgn
+          buf += sub_tree([:op_asgn_or, [:lvar, lvar_name], [:lasgn, lvar_name, asgn_tree]])
+        end
+      end
+    end
+    buf
   end
   
   def visit_array(*items)
-    items.map{|item| sub_tree(item).first }.inspect
+    "RubyArray.new(#{items.map{|item| sub_tree(item) }.join(',')})"
   end
   
   def visit_block(*trees)
     buf = "function() {"
+    # buf += "var locals = {};"
+    buf += "var __block_given__ = false;"
     for tree in trees
       buf += sub_tree(tree)
     end
@@ -97,21 +113,42 @@ class ClientRuby
     buf
   end
   
-  def visit_block_arg(*args)
-    ""
+  def visit_block_arg(name)
+    "var #{name} = arguments[arguments.length];" # var __block_given__ = true;"
+  end
+
+  # def visit_block_pass(*args)
+  #   ""
+  # end
+  
+  def visit_call(tree, method_name, args_list=nil)
+    if args_list
+      args_list.shift
+      args = args_list.map{|arg| sub_tree(arg) }.join(",")
+    end
+    "#{sub_tree(tree)}[#{method_name.to_s.inspect}](#{args ? args : ""})"
   end
   
-  def visit_block_pass(*args)
-    ""
+  def visit_cdecl(constant_name, tree)
+    "#{constant_name} = #{sub_tree(tree)};"
   end
   
-  def visit_call(tree, method_name)
-    "#{sub_tree(tree)}.#{method_name}()"
+  # TODO: Figure out what the difference between cvar and cvdecl is.
+  def visit_cvar(cvar_name)
+    "cvars[#{cvar_name.to_s.inspect}]"
+  end
+  
+  def visit_cvdecl(cv_name)
+    "cvars[#{cv_name.to_s.inspect}]"
   end
   
   def visit_class(name, superclass, tree)
     @scope = name.to_s
     "define_class(self, #{name.to_s.inspect}, #{sub_tree(superclass) if superclass}, #{sub_tree(tree)};"
+  end
+  
+  def visit_const(constant_name)
+    constant_name
   end
   
   def visit_defn(method_name, tree)
@@ -122,24 +159,100 @@ class ClientRuby
     "define_method(#{sub_tree(tree)}, #{method_name.to_s.inspect}, #{sub_tree(method_tree)})"
   end
   
+  def visit_dstr(first_chunk, *trees)
+    buf = first_chunk.inspect
+    trees.each do |tree|
+      buf += " + "
+      buf += sub_tree(tree)
+    end
+    buf
+  end
+  
+  def visit_evstr(tree)
+    sub_tree(tree)
+  end
+  
   def visit_fcall(function_name, tree)
     "#{function_name}(#{sub_tree(tree)});"
   end 
+  
+  def visit_hash
+    "{}"
+  end
+  
+  def visit_iasgn(ivar_name, tree=nil)
+    %{self[#{ivar_name.to_s.inspect}]#{tree ? " = #{sub_tree(tree)};" : ""}}
+  end
+  
+  def visit_lasgn(local_name, tree)
+    "var #{local_name} = #{sub_tree(tree)};"
+  end
+  
+  def visit_if(conditional, matched_tree, else_tree=nil)
+    %{if(sub_tree(conditional)) #{else_tree ? "#{sub_tree(matched_tree)} #{sub_tree(else_tree)}" : ''}}
+  end
+  
+  def visit_ivar(ivar_name)
+    "self[#{ivar_name.to_s.inspect}]"
+  end
   
   def visit_lit(literal)
     literal.to_s
   end
   
+  def visit_lvar(lvar_name)
+    lvar_name
+  end
+  
+  def visit_masgn(assignees, _, assignments)
+    assignees.shift; assignments.shift
+    buf = ""
+    assignees.each_with_index do |assignee, index|
+      # TODO: Special case for cvars, can't use =, must use special assignment function.
+      buf += "#{sub_tree(assignee)} = #{sub_tree([assignments[index].last])};"
+    end
+    buf
+  end
+  
+  def visit_module(name, tree)
+    @scope = name.to_s
+    "define_class(self, #{name.to_s.inspect}, #{sub_tree(tree)};"
+  end
+  
+  def visit_nil
+    "null"
+  end
+  
+  def visit_op_asgn_or(value_tree, assignment_tree)
+    "if(!(#{sub_tree(value_tree)})) { #{sub_tree(assignment_tree)} }"
+  end
+  
+  def visit_or(this, that)
+    "(#{sub_tree(this)} || #{sub_tree(that)})"
+  end
+  
   def visit_scope(tree)
-    "(function(){var self = #{@scope};#{sub_tree(tree)}})()"
+    "(function(){var self = #{@scope}; var cvars = class_vars(self);  #{sub_tree(tree)}})()"
+  end
+  
+  def visit_self
+    "self"
   end
   
   def visit_str(string)
-    string
+    string.inspect
   end
   
-  def visit_const(constant_name)
-    constant_name
+  def visit_true
+    "true"
+  end
+  
+  def visit_vcall(name)
+    "#{name}()"
+  end
+  
+  def visit_zarray
+    "RubyArray.new"
   end
 end
 
