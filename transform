@@ -16,6 +16,12 @@ end
 
 class ClientRuby
   
+  JSProperty = /^[_a-z]+$/i
+  
+  ConstantMap = {
+    'Array' => 'RubyArray'
+  }.freeze
+  
   RubyNodes = [
     # 00
     :method, :fbody, :cfunc, :scope, :block,
@@ -51,7 +57,7 @@ class ClientRuby
     # 100
     :memo, :ifunc, :dsym, :attrasgn,
     :last
-   ]
+   ].freeze
   
   def initialize(tree, scope=nil)
     @scope = scope
@@ -67,7 +73,10 @@ class ClientRuby
   end
   
   def visit_tree(tree)
-    key = tree.shift
+    # TODO: UnifiedRuby
+    # tree = Unifier.new.process(tree)
+    
+    key = tree.shift if tree.respond_to?(:shift)
     if respond_to?("visit_#{key}")
       send("visit_#{key}", *tree)
     elsif RubyNodes.include?(key)
@@ -81,6 +90,11 @@ class ClientRuby
     ClientRuby.new(nil, @scope).visit_tree(tree)      
   end
   
+  def visit_and(left_expression, right_expression)
+    "#{sub_tree(left_expression)} && #{sub_tree(right_expression)}"
+  end
+  
+  # TODO: *splatted arguments
   def visit_args(*args)
     buf = ""
     args.each_with_index do |arg, index|
@@ -98,35 +112,53 @@ class ClientRuby
     buf
   end
   
+  def visit_argscat(*args)
+    "___ARGSCAT___"
+  end
+  
   def visit_array(*items)
     "RubyArray.new(#{items.map{|item| sub_tree(item) }.join(',')})"
+  end
+  
+  def visit_attrasgn(attr_expression, setter, value_expression)
+    "#{sub_tree(attr_expression)}.#{setter.to_s.gsub('=', '')} = #{value_expression}"
   end
   
   def visit_block(*trees)
     buf = "function() {"
     # buf += "var locals = {};"
-    buf += "var __block_given__ = false;"
+    # buf += "var __block_given__ = false;"
     for tree in trees
-      buf += sub_tree(tree)
+      buf += sub_tree(tree).to_s
+      buf += ";" unless buf[/;$/]
     end
     buf += "}"
     buf
   end
   
   def visit_block_arg(name)
-    "var #{name} = arguments[arguments.length];" # var __block_given__ = true;"
+    "var #{name} = __block_argument__ = arguments[arguments.length]; var __block_given__ = true;"
   end
 
-  # def visit_block_pass(*args)
-  #   ""
-  # end
+  # TODO: understand what is happening in block_pass
+  def visit_block_pass(block_expression, expression)
+    # expression << block_expression
+    sub_tree(expression)
+  rescue
+    raise [block_expression, expression].inspect
+  end
+  
+  def visit_break(*args)
+    "___BREAK___"
+  end
   
   def visit_call(tree, method_name, args_list=nil)
     if args_list
-      args_list.shift
-      args = args_list.map{|arg| sub_tree(arg) }.join(",")
+      args_list.shift if args_list.respond_to?(:shift)
+      args = args_list.map{|arg| sub_tree(arg).to_s }.join(",")
     end
-    "#{sub_tree(tree)}[#{method_name.to_s.inspect}](#{args ? args : ""})"
+    method_access = method_name.to_s[JSProperty] ? ".#{method_name}" : "[#{method_name.to_s.inspect}]"
+    "#{sub_tree(tree)}#{method_access}(#{args ? args : ""})"
   end
   
   def visit_cdecl(constant_name, tree)
@@ -143,14 +175,30 @@ class ClientRuby
   end
   
   def visit_class(name, superclass, tree)
+    name = ConstantMap[name.to_s] || name
     @scope = name.to_s
     "define_class(self, #{name.to_s.inspect}, #{sub_tree(superclass) if superclass}, #{sub_tree(tree)};"
   end
   
-  def visit_const(constant_name)
-    constant_name
+  def visit_colon2(context, item)
+    "#{sub_tree(context)}.#{item}"
   end
   
+  def visit_const(constant_name)
+    ConstantMap[constant_name.to_s] or constant_name
+  end
+  
+  # TODO: figure out how to trim the JS implementation
+  #   The js functions are redundant here. self, cvars and arguments can all be passed
+  #     as arguments at call time. Maybe this can even be used to give self all the correct bindings?
+  # define_method(self, "initialize", (function () {
+  #     var self = RubyArray;
+  #     var cvars = class_vars(self);
+  # 
+  #     function () {
+  #  BECOMES
+  # define_method(self, "initialize", (function (self, cvars, arguments) {});
+  #               self ----->   becomes   -----> self
   def visit_defn(method_name, tree)
     "define_method(self, #{method_name.to_s.inspect}, #{sub_tree(tree)});"
   end
@@ -163,17 +211,32 @@ class ClientRuby
     buf = first_chunk.inspect
     trees.each do |tree|
       buf += " + "
-      buf += sub_tree(tree)
+      buf += sub_tree(tree).to_s
     end
     buf
+  end
+  
+  def visit_dot2(start_expression, finish_expression)
+    "__DOT2__" # TODO: Figure out what to do with dot2 expressions
+  end
+  
+  def visit_dot3(start_expression, finish_expression)
+    # TODO: Make sure dot3 is understood
+    "Range.new(#{sub_tree(start_expression)}, #{sub_tree(finish_expression)})"
   end
   
   def visit_evstr(tree)
     sub_tree(tree)
   end
   
-  def visit_fcall(function_name, tree)
-    "#{function_name}(#{sub_tree(tree)});"
+  def visit_false
+    "false"
+  end
+  
+  # TODO: Decide what the scope of this is
+  def visit_fcall(function_name, expression=nil)
+    function_accessor = function_name.to_s[JSProperty] ? function_name : "this[#{function_name.to_s.inspect}]"
+    "#{function_accessor}(#{expression ? sub_tree(expression) : ""});"
   end 
   
   def visit_hash
@@ -184,12 +247,26 @@ class ClientRuby
     %{self[#{ivar_name.to_s.inspect}]#{tree ? " = #{sub_tree(tree)};" : ""}}
   end
   
-  def visit_lasgn(local_name, tree)
-    "var #{local_name} = #{sub_tree(tree)};"
+  def visit_lasgn(local_name, expression=nil)
+    if expression
+      "var #{local_name} = #{sub_tree(expression)};"
+    else
+      "var #{local_name}"
+    end
   end
   
+  # Uses condition ? true : false because it returns a value.
+  # Ruby conditions always return value.
   def visit_if(conditional, matched_tree, else_tree=nil)
-    %{if(sub_tree(conditional)) #{else_tree ? "#{sub_tree(matched_tree)} #{sub_tree(else_tree)}" : ''}}
+    if matched_tree
+      %{#{sub_tree(conditional)} ? #{else_tree ? "#{sub_tree(matched_tree).to_s.gsub(/;$/, '')} : #{sub_tree(else_tree)}" : "#{sub_tree(matched_tree).to_s.gsub(/;$/, '')} : null;"}}
+    else
+      "#{sub_tree(conditional)} ? null : #{sub_tree(else_tree)}"
+    end
+  end
+  
+  def visit_iter(*expression)
+    sub_tree(expression.first)
   end
   
   def visit_ivar(ivar_name)
@@ -205,16 +282,18 @@ class ClientRuby
   end
   
   def visit_masgn(assignees, _, assignments)
-    assignees.shift; assignments.shift
-    buf = ""
-    assignees.each_with_index do |assignee, index|
-      # TODO: Special case for cvars, can't use =, must use special assignment function.
-      buf += "#{sub_tree(assignee)} = #{sub_tree([assignments[index].last])};"
-    end
-    buf
+    "___MASGN___"
+    # assignees.shift; assignments.shift
+    # buf = ""
+    # assignees.each_with_index do |assignee, index|
+    #   # TODO: Special case for cvars, can't use =, must use special assignment function.
+    #   buf += "#{sub_tree(assignee)} = #{sub_tree(assignments[index])};"
+    # end
+    # buf
   end
   
   def visit_module(name, tree)
+    name = ConstantMap[name.to_s] || name
     @scope = name.to_s
     "define_class(self, #{name.to_s.inspect}, #{sub_tree(tree)};"
   end
@@ -223,12 +302,28 @@ class ClientRuby
     "null"
   end
   
+  def visit_not(expression)
+    "!(#{sub_tree(expression)})"
+  end
+  
   def visit_op_asgn_or(value_tree, assignment_tree)
     "if(!(#{sub_tree(value_tree)})) { #{sub_tree(assignment_tree)} }"
   end
   
   def visit_or(this, that)
     "(#{sub_tree(this)} || #{sub_tree(that)})"
+  end
+  
+  def visit_resbody(rescue_types, rescue_expression)
+    %{if(#{sub_tree(rescue_types)}.find(function(type) {return exception["is_a?"](type);})) {#{sub_tree(rescue_expression)}}}
+  end
+  
+  def visit_rescue(begin_expression, rescue_expression)
+    "try{ #{sub_tree(begin_expression)} } catch(exception) { #{sub_tree(rescue_expression)} }"
+  end
+  
+  def visit_return(expression=nil)
+    "return #{expression ? sub_tree(expression) : ''}"
   end
   
   def visit_scope(tree)
@@ -248,11 +343,28 @@ class ClientRuby
   end
   
   def visit_vcall(name)
-    "#{name}()"
+    if name.to_s[JSProperty]
+      "#{name}()"
+    else
+      "ClientRuby[#{name.inspect}]()"
+    end
+  end
+  
+  # TODO: Figure out what the boolean arg is for
+  def visit_while(condition_tree, block_tree, boolean)
+    "while(#{sub_tree(condition_tree)} {#{sub_tree(block_tree)}})"
+  end
+  
+  def visit_yield(yield_expression=nil)
+    "__block_argument__(#{yield_expression ? sub_tree(yield_expression) : ""})"
   end
   
   def visit_zarray
-    "RubyArray.new"
+    "#{ConstantMap["Array"]}.new()"
+  end
+  
+  def visit_zsuper
+    "___ZSUPER___"
   end
 end
 

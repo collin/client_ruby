@@ -42,13 +42,13 @@ ClientRuby.class_vars = function ClientRuby__class_var (name) {
   return self.__class_vars__;
 }
 
-ClientRuby.extend_module = function ClientRuby__extend_module (self, module) {
+ClientRuby.extend = function ClientRuby__extend (self, module) {
   var method;
   for(method in module) define_method(self, method, module[method]); // DO THIS: if(module.hasOwnProperty(method))
 }
 
-ClientRuby.include_module = function ClientRuby__include_module (self, module) {
-  extend_module(self.prototype, module.prototype);
+ClientRuby.include = function ClientRuby__include (self, module) {
+  extend(self.prototype, module.prototype);
 }
 
 ClientRuby.puts = function ClientRuby__puts () {
